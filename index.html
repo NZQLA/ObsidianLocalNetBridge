@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Obsidian 本地链接桥接</title>
+  <style>
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f9f9f9;
+      color: #222;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+    }
+    .box {
+      width: min(100%, 620px);
+      padding: 24px;
+      box-sizing: border-box;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 2px 12px rgb(0 0 0 / 10%);
+    }
+    h1, h2 { margin-top: 0; }
+    p { color: #666; line-height: 1.6; }
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font: inherit;
+      resize: vertical;
+    }
+    textarea[readonly] { min-height: 72px; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 12px 0;
+    }
+    button, .link-button {
+      display: inline-block;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 6px;
+      background: #7c3aed;
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .secondary { background: #555; }
+    #message { min-height: 1.5em; margin-bottom: 0; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main class="box">
+    <section id="home-page" hidden>
+      <h1>Obsidian 链接转换</h1>
+      <p>粘贴 Obsidian 笔记链接，选择一种格式生成本地桥接链接。生成后会自动尝试复制。</p>
+      <label for="obsidian-input">Obsidian URL</label>
+      <textarea id="obsidian-input" placeholder="obsidian://open?vault=DevWorld&amp;file=笔记路径"></textarea>
+      <div class="actions">
+        <button id="plain-button" type="button">生成明文链接</button>
+        <button id="base64-button" type="button">生成 Base64 链接</button>
+      </div>
+      <label for="result">生成的本地链接</label>
+      <textarea id="result" readonly placeholder="转换结果会显示在这里"></textarea>
+      <p id="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="jump-page" hidden>
+      <h2 id="jump-status">正在尝试打开 Obsidian...</h2>
+      <p id="jump-message">如果浏览器没有自动打开，请点击下面的按钮；首次使用时，请允许浏览器打开 Obsidian。</p>
+      <div class="actions">
+        <a id="open-link" class="link-button" href="#" hidden>在 Obsidian 中打开</a>
+        <a id="home-link" class="link-button secondary" href="/ob/">首页</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function decodeBase64Utf8(value) {
+      try {
+        const normalized = value
+          .replace(/ /g, '+')
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+        const binary = atob(padded);
+        const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch (error) {
+        console.error('Base64 decode failed:', error);
+        return null;
+      }
+    }
+
+    function encodeBase64Utf8(value) {
+      const bytes = new TextEncoder().encode(value);
+      let binary = '';
+      for (const byte of bytes) {
+        binary += String.fromCharCode(byte);
+      }
+      return btoa(binary);
+    }
+
+    function parseObsidianUrl(value) {
+      let url;
+      try {
+        url = new URL(value.trim());
+      } catch {
+        throw new Error('请输入有效的 Obsidian URL。');
+      }
+
+      if (url.protocol !== 'obsidian:' || url.hostname.toLowerCase() !== 'open') {
+        throw new Error('链接格式应为 obsidian://open?...');
+      }
+
+      const file = url.searchParams.get('file');
+      if (!file) {
+        throw new Error('Obsidian URL 中没有 file 参数。');
+      }
+
+      return {
+        vault: url.searchParams.get('vault') || 'DevWorld',
+        file
+      };
+    }
+
+    async function createBridgeLink(useBase64) {
+      const message = document.getElementById('message');
+      const result = document.getElementById('result');
+      message.textContent = '';
+
+      try {
+        const { vault, file } = parseObsidianUrl(document.getElementById('obsidian-input').value);
+        const base = `${window.location.origin}/ob/?vault=${encodeURIComponent(vault)}&`;
+        const bridgeUrl = useBase64
+          ? `${base}b64=${encodeURIComponent(encodeBase64Utf8(file))}`
+          : `${base}file=${encodeURIComponent(file)}`;
+
+        result.value = bridgeUrl;
+        try {
+          await navigator.clipboard.writeText(bridgeUrl);
+          message.textContent = '链接已生成并复制到剪贴板。';
+        } catch (error) {
+          console.warn('Clipboard write failed:', error);
+          result.focus();
+          result.select();
+          message.textContent = '链接已生成；浏览器未允许自动复制，请手动复制上方内容。';
+        }
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    }
+
+    document.getElementById('plain-button').addEventListener('click', () => createBridgeLink(false));
+    document.getElementById('base64-button').addEventListener('click', () => createBridgeLink(true));
+
+    const params = new URLSearchParams(window.location.search);
+    const hasBridgeParameter = params.has('file') || params.has('b64');
+
+    if (!hasBridgeParameter) {
+      document.getElementById('home-page').hidden = false;
+    } else {
+      document.getElementById('jump-page').hidden = false;
+      document.getElementById('home-link').href = `${window.location.origin}/ob/`;
+
+      const vault = params.get('vault') || 'DevWorld';
+      const b64 = params.get('b64');
+      const file = b64 !== null ? decodeBase64Utf8(b64) : params.get('file');
+
+      if (file !== null && file.length > 0) {
+        const obsidianUrl = `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(file)}`;
+        document.getElementById('jump-status').textContent = `笔记：${file}`;
+
+        const openLink = document.getElementById('open-link');
+        openLink.href = obsidianUrl;
+        openLink.hidden = false;
+
+        window.location.href = obsidianUrl;
+      } else {
+        document.getElementById('jump-status').textContent = '无法打开 Obsidian 笔记';
+        document.getElementById('jump-message').textContent = '笔记路径缺失或 Base64 内容无效。可以返回首页重新生成链接。';
+      }
+    }
+  </script>
+</body>
+</html>
